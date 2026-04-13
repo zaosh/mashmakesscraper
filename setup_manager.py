@@ -74,7 +74,23 @@ def write_env_file(env_vars: dict):
 
 
 def save_service_account_file(file_bytes):
-    """Save uploaded service account JSON to the project directory."""
+    """Save uploaded service account JSON to the project directory after validation."""
+    import json as _json
+    # Validate it's actually a Google service account JSON
+    try:
+        data = _json.loads(file_bytes)
+        if not isinstance(data, dict):
+            raise ValueError("Not a JSON object")
+        required_fields = ["type", "project_id", "client_email", "private_key"]
+        missing = [f for f in required_fields if f not in data]
+        if missing:
+            raise ValueError(f"Missing required fields: {missing}")
+        if data.get("type") != "service_account":
+            raise ValueError("Not a service account key file")
+    except (_json.JSONDecodeError, ValueError) as e:
+        log_error(f"Invalid service account file: {e}")
+        raise ValueError(f"Invalid service account file: {e}")
+
     path = "service_account.json"
     with open(path, "wb") as f:
         f.write(file_bytes)
@@ -84,7 +100,8 @@ def save_service_account_file(file_bytes):
 
 def test_slack_webhook(webhook_url):
     import requests
-    if not webhook_url or "hooks.slack.com" not in webhook_url:
+    import re
+    if not webhook_url or not re.match(r'^https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]+$', webhook_url):
         return False, "Invalid Slack webhook URL format"
     try:
         resp = requests.post(
@@ -101,6 +118,9 @@ def test_slack_webhook(webhook_url):
 
 def test_google_sheets(sheet_id, sa_file="service_account.json"):
     """Test Google Sheets connection and return the sheet title."""
+    import re
+    if not sheet_id or not re.match(r'^[a-zA-Z0-9_-]+$', sheet_id):
+        return False, "Invalid Sheet ID format"
     try:
         import gspread
         from google.oauth2.service_account import Credentials

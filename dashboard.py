@@ -10,31 +10,33 @@ from setup_manager import (
     test_google_sheets, test_dtdc_api,
 )
 
-st.set_page_config(page_title="MashMakes Tracker — Setup 01", page_icon="📦", layout="wide")
+st.set_page_config(page_title="MashMakes Tracker", page_icon="📦", layout="wide")
+
+
+def _reload_config():
+    """Reload .env into config module so changes take effect without restart."""
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    config.GOOGLE_SPREADSHEET_ID = os.getenv("GOOGLE_SPREADSHEET_ID", "")
+    config.GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
+    config.SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
+    config.SLACK_ENABLED = os.getenv("SLACK_ENABLED", "True").lower() in ('true', '1', 't')
 
 
 # ============================================================
 # GOOGLE AUTH LOGIN
 # ============================================================
 def google_auth_gate():
-    """
-    Google OAuth login gate.
-    Only allows users with emails from the configured allowed domain.
-    Uses Streamlit's experimental user info from OAuth proxy.
-    """
-    # If no auth configured, allow access (for local dev)
     allowed_emails = os.getenv("ALLOWED_EMAILS", "")
     allowed_domain = os.getenv("ALLOWED_DOMAIN", "")
 
     if not allowed_emails and not allowed_domain:
         return True
 
-    # Check if Streamlit has user info (requires OAuth proxy like Cloudflare Access,
-    # Google IAP, or streamlit-authenticator)
     user_email = st.experimental_user.get("email", "") if hasattr(st, "experimental_user") else ""
 
     if not user_email:
-        st.title("🔒 Access Restricted")
+        st.title("Access Restricted")
         st.error(
             "This dashboard requires Google authentication.\n\n"
             "Please access this through your company's SSO portal, "
@@ -43,18 +45,16 @@ def google_auth_gate():
         st.stop()
         return False
 
-    # Check domain
     if allowed_domain and not user_email.endswith(f"@{allowed_domain}"):
-        st.title("🔒 Access Denied")
+        st.title("Access Denied")
         st.error(f"Your email ({user_email}) is not from the allowed domain (@{allowed_domain}).")
         st.stop()
         return False
 
-    # Check specific emails
     if allowed_emails:
         email_list = [e.strip().lower() for e in allowed_emails.split(",")]
         if user_email.lower() not in email_list:
-            st.title("🔒 Access Denied")
+            st.title("Access Denied")
             st.error(f"Your email ({user_email}) is not in the allowed list.")
             st.stop()
             return False
@@ -66,7 +66,7 @@ def google_auth_gate():
 # FIRST-TIME SETUP WIZARD
 # ============================================================
 def run_setup_wizard():
-    st.title("📦 MashMakes Tracker — Setup")
+    st.title("MashMakes Tracker — Setup")
     st.markdown("Let's get your shipment tracking system running. This takes about 5 minutes.")
     st.markdown("---")
 
@@ -74,8 +74,6 @@ def run_setup_wizard():
         st.session_state["setup_step"] = 1
 
     step = st.session_state["setup_step"]
-
-    # Progress bar
     st.progress(step / 3)
 
     # ---- STEP 1: Google Sheets ----
@@ -88,7 +86,6 @@ AWB numbers from any device (phone, laptop, tablet). The system watches the shee
 tracks each shipment, sends updates to Slack, and auto-clears delivered orders.
 """)
 
-        # --- PART A: Create the Google Sheet ---
         st.subheader("A. Create your Google Sheet")
         st.markdown("""
 1. Open [Google Sheets](https://sheets.google.com) and create a **new blank spreadsheet**
@@ -96,11 +93,6 @@ tracks each shipment, sends updates to Slack, and auto-clears delivered orders.
 3. **Copy the Sheet ID from the URL bar** — it's the long random string:
 
    `https://docs.google.com/spreadsheets/d/`**`THIS_PART_IS_THE_ID`**`/edit`
-
-   For example, if your URL is:
-   `https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms/edit`
-
-   Then the Sheet ID is: `1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms`
 """)
 
         sheet_id = st.text_input(
@@ -111,13 +103,10 @@ tracks each shipment, sends updates to Slack, and auto-clears delivered orders.
 
         st.markdown("---")
 
-        # --- PART B: Create a Service Account ---
         st.subheader("B. Create a Service Account (one-time, ~3 minutes)")
         st.markdown("""
 A "service account" is like a robot Google account that lets this system read and write
 to your Sheet. You create it once and never have to touch it again.
-
-**Follow these steps:**
 """)
 
         with st.expander("Step-by-step instructions (click to expand)", expanded=True):
@@ -131,34 +120,27 @@ to your Sheet. You create it once and never have to touch it again.
 **2. Enable the Google Sheets API**
 - In the search bar at the top, type **"Google Sheets API"**
 - Click on it, then click the blue **"Enable"** button
-- Wait a few seconds for it to activate
 
 **3. Create the Service Account**
 - In the search bar, type **"Service Accounts"** and click the result under IAM
 - Click **"+ Create Service Account"** at the top
-- Name: `antigravity-tracker` (or anything you like)
-- Click **Create and Continue**
-- For "Role", select **Editor** from the dropdown, then click **Continue**
-- Click **Done**
+- Name: `mashmakes-tracker` (or anything you like)
+- Click **Create and Continue** -> select **Editor** role -> click **Done**
 
 **4. Download the Key File**
-- You'll see your new service account in the list. Click on it
+- Click on your new service account in the list
 - Go to the **"Keys"** tab
-- Click **"Add Key" → "Create new key"**
-- Choose **JSON** and click **Create**
-- A `.json` file will download to your computer — **this is what you upload below**
+- Click **"Add Key" -> "Create new key"** -> choose **JSON** -> click **Create**
+- A `.json` file will download — **upload it below**
 
 **5. Share your Google Sheet with the service account**
 - Open the downloaded JSON file in Notepad
-- Find the line that says `"client_email": "something@something.iam.gserviceaccount.com"`
+- Find `"client_email": "something@something.iam.gserviceaccount.com"`
 - Copy that email address
-- Go to your Google Sheet, click **Share**, paste the email, give it **Editor** access
+- Go to your Google Sheet -> click **Share** -> paste the email -> **Editor** access
 """)
 
-        st.warning("""
-**Keep the JSON file safe.** It's like a password for your Google Sheet.
-Don't share it publicly or send it over chat. Upload it here and it stays on this server only.
-""")
+        st.warning("**Keep the JSON file safe.** It's like a password for your Google Sheet.")
 
         sa_upload = st.file_uploader(
             "Upload the JSON key file you downloaded in step 4",
@@ -175,14 +157,13 @@ Don't share it publicly or send it over chat. Upload it here and it stays on thi
                     st.success(f"File looks good! Service account email: `{sa_email}`")
                     st.info(
                         f"**Important:** Make sure you shared your Google Sheet with "
-                        f"`{sa_email}` as an **Editor**. "
-                        f"(Open your Sheet → Share → paste this email → Editor → Send)"
+                        f"`{sa_email}` as an **Editor**."
                     )
                 else:
-                    st.error("This file doesn't look right — it's missing a `client_email` field. "
-                             "Make sure you downloaded the JSON key from the Service Accounts page.")
+                    st.error("This file is missing a `client_email` field. "
+                             "Make sure you downloaded the JSON key from Service Accounts.")
             except Exception:
-                st.error("Couldn't read this file. Make sure it's the .json file that Google downloaded for you.")
+                st.error("Couldn't read this file. Make sure it's the .json key file from Google.")
 
         st.markdown("---")
 
@@ -198,21 +179,14 @@ Don't share it publicly or send it over chat. Upload it here and it stays on thi
                         else:
                             st.error(f"Failed: {msg}")
                             if "403" in str(msg):
-                                st.warning(
-                                    "**Permission denied.** This usually means you haven't shared "
-                                    "the Google Sheet with the service account email yet. "
-                                    "Go to your Sheet → Share → paste the service account email → Editor → Send."
-                                )
+                                st.warning("**Permission denied.** Share the Google Sheet with the service account email as Editor.")
                             elif "not found" in str(msg).lower():
-                                st.warning(
-                                    "**Sheet not found.** Double-check the Sheet ID you pasted. "
-                                    "It should be the long string from the URL, not the full URL."
-                                )
+                                st.warning("**Sheet not found.** Double-check the Sheet ID (the long string from the URL).")
                 else:
                     st.warning("Upload the JSON file and enter the Sheet ID first.")
 
         with col_next:
-            if st.button("Next →", key="step1_next"):
+            if st.button("Next ->", key="step1_next"):
                 if not sa_upload or not sheet_id:
                     st.error("Both the service account file and Sheet ID are required.")
                 else:
@@ -228,7 +202,7 @@ Don't share it publicly or send it over chat. Upload it here and it stays on thi
         st.markdown("""
 **This is how your team gets notified.** Every time a shipment status changes, the system
 posts a message to your Slack channel. You'll also get:
-- Status change alerts (e.g., "In Transit" → "Out for Delivery")
+- Status change alerts (e.g., "In Transit" -> "Out for Delivery")
 - Error alerts if tracking fails
 - A daily summary at 6 PM
 - Immediate warning if the tracking system breaks
@@ -241,31 +215,22 @@ posts a message to your Slack channel. You'll also get:
 - Sign in with the same Slack account your team uses
 
 **2. Create a New App**
-- Click **"Create New App"**
-- Choose **"From scratch"**
+- Click **"Create New App"** -> **"From scratch"**
 - App Name: `MashMakes Tracker` (or anything you like)
-- Pick your **workspace** from the dropdown
-- Click **"Create App"**
+- Pick your **workspace** -> click **"Create App"**
 
 **3. Enable Webhooks**
 - On the left sidebar, click **"Incoming Webhooks"**
 - Toggle the switch to **ON**
 - Scroll down and click **"Add New Webhook to Workspace"**
-- Pick the **channel** where you want shipment updates (e.g., `#shipments` or `#operations`)
-- Click **"Allow"**
+- Pick the **channel** (e.g., `#shipments`) -> click **"Allow"**
 
 **4. Copy the URL**
-- You'll see a new webhook URL that looks like:
-  `https://hooks.slack.com/services/TXXXXX/BXXXXX/XXXXXXXXXX`
+- You'll see a URL like: `https://hooks.slack.com/services/TXXXXX/BXXXXX/XXXXXXXXXX`
 - Click **"Copy"** and paste it below
 """)
 
-        st.warning("""
-**Keep this URL private.** Anyone with this URL can post messages to your Slack channel.
-- Don't paste it in Slack itself or any public place
-- It's stored in a local config file on this server only
-- If it leaks, go back to the Slack App settings and regenerate it
-""")
+        st.warning("**Keep this URL private.** Anyone with it can post to your Slack channel.")
 
         webhook_url = st.text_input(
             "Paste your Slack Webhook URL here",
@@ -282,17 +247,19 @@ posts a message to your Slack channel. You'll also get:
                     else:
                         st.error(f"Failed: {msg}")
                         if "invalid" in str(msg).lower():
-                            st.warning("The URL doesn't look right. Make sure you copied the full URL starting with `https://hooks.slack.com/services/`")
+                            st.warning("Make sure you copied the full URL starting with `https://hooks.slack.com/services/`")
 
         col_back, col_next = st.columns(2)
         with col_back:
-            if st.button("← Back", key="step2_back"):
+            if st.button("<- Back", key="step2_back"):
                 st.session_state["setup_step"] = 1
                 st.rerun()
         with col_next:
-            if st.button("Next →", key="step2_next"):
+            if st.button("Next ->", key="step2_next"):
                 if not webhook_url:
-                    st.error("Slack webhook is required — this is how your team gets updates.")
+                    st.error("Slack webhook URL is required.")
+                elif "hooks.slack.com" not in webhook_url:
+                    st.error("That doesn't look like a valid Slack webhook URL.")
                 else:
                     st.session_state["cfg_slack_url"] = webhook_url
                     st.session_state["setup_step"] = 3
@@ -310,7 +277,7 @@ posts a message to your Slack channel. You'll also get:
             st.success(f"DTDC API: {dtdc_msg}")
         else:
             st.error(f"DTDC API: {dtdc_msg}")
-            st.warning("The DTDC API is not reachable. The system will fall back to browser scraping, which is slower but still works.")
+            st.warning("DTDC API not reachable. The system will fall back to browser scraping.")
 
         # Google Sheets
         sheet_id = st.session_state.get("cfg_sheet_id", "")
@@ -322,32 +289,26 @@ posts a message to your Slack channel. You'll also get:
             st.error(f"Google Sheets: {gs_msg}")
 
         # Slack
-        st.success("Slack: Configured")
+        slack_url = st.session_state.get("cfg_slack_url", "")
+        if slack_url and "hooks.slack.com" in slack_url:
+            st.success("Slack: Configured")
+        else:
+            st.warning("Slack: Not configured")
 
         st.markdown("---")
         st.subheader("How the system works")
         st.markdown("""
 1. **Your team adds AWB numbers** to the Google Sheet's "Active" tab (from any device)
-2. **Every 3 hours**, the system reads the sheet and checks each AWB against DTDC
+2. **Every 3 hours**, the system checks each AWB against DTDC
 3. **When a status changes**, it updates the sheet and sends a Slack notification
-4. **When an order is delivered**, it auto-moves to the "Delivered" tab (keeps Active clean)
-5. **At 6 PM daily**, it sends a summary report to Slack
-6. **If things break**, it alerts Slack immediately with troubleshooting steps
-""")
-
-        st.markdown("---")
-        st.subheader("Security Summary")
-        st.markdown("""
-- **Google Sheet** — access controlled by Google (only shared accounts can read/write)
-- **Slack Webhook** — stored in local `.env` file, never transmitted elsewhere
-- **Service Account Key** — stored locally as `service_account.json`, not committed to git
-- **DTDC API** — public endpoint, no credentials needed
-- **No passwords stored** — access is controlled via Google Sheet sharing permissions
+4. **When an order is delivered**, it auto-moves to the "Delivered" tab
+5. **At 6 PM daily**, it sends a summary to Slack
+6. **If things break**, it alerts Slack immediately
 """)
 
         col_back, col_finish = st.columns(2)
         with col_back:
-            if st.button("← Back", key="step3_back"):
+            if st.button("<- Back", key="step3_back"):
                 st.session_state["setup_step"] = 2
                 st.rerun()
         with col_finish:
@@ -355,13 +316,14 @@ posts a message to your Slack channel. You'll also get:
                 env_vars = {
                     "GOOGLE_SPREADSHEET_ID": sheet_id,
                     "GOOGLE_SERVICE_ACCOUNT_FILE": "service_account.json",
-                    "SLACK_WEBHOOK_URL": st.session_state["cfg_slack_url"],
+                    "SLACK_WEBHOOK_URL": st.session_state.get("cfg_slack_url", ""),
                     "SLACK_ENABLED": "True",
                     "HEADLESS_BROWSER": "True",
                     "RETRY_LIMIT": "3",
                 }
                 write_env_file(env_vars)
                 mark_setup_complete()
+                _reload_config()
 
                 # Initialize DB (creates Active/Delivered sheets)
                 DatabaseManager()
@@ -376,7 +338,8 @@ posts a message to your Slack channel. You'll also get:
 # MAIN DASHBOARD
 # ============================================================
 def run_dashboard():
-    st.title("📦 MashMakes Shipment Tracker")
+    st.title("MashMakes Shipment Tracker")
+    _reload_config()
 
     db = DatabaseManager()
 
@@ -384,66 +347,98 @@ def run_dashboard():
     state = db.load_system_state()
 
     col1, col2, col3, col4 = st.columns(4)
+
     with col1:
-        s = state.get("scraper_status", "Unknown")
-        if s == "Working":
-            st.success(f"Scraper: {s}")
-        elif s == "Warning":
-            st.warning(f"Scraper: {s}")
+        # Live DTDC API status instead of stale scraper state
+        last_run = state.get("last_run", "Never")
+        scraper_status = state.get("scraper_status", "Not Run")
+        if scraper_status == "Working":
+            st.success(f"Tracker: {scraper_status}")
+        elif scraper_status in ("Warning", "Idle (No Orders)"):
+            st.warning(f"Tracker: {scraper_status}")
+        elif last_run == "Never" or scraper_status == "Not Run":
+            st.info("Tracker: Awaiting first run")
         else:
-            st.error(f"Scraper: {s}")
+            st.error(f"Tracker: {scraper_status}")
+
     with col2:
-        if config.SLACK_ENABLED and config.SLACK_WEBHOOK_URL:
+        if config.SLACK_ENABLED and config.SLACK_WEBHOOK_URL and "hooks.slack.com" in config.SLACK_WEBHOOK_URL:
             st.success("Slack: Connected")
         else:
-            st.warning("Slack: Not set")
+            st.warning("Slack: Not configured")
+
     with col3:
         st.info(f"Last Run: {state.get('last_run', 'Never')}")
+
     with col4:
         st.metric("Today", f"{state.get('success_today', 0)} ok / {state.get('failed_today', 0)} failed")
 
     st.markdown("---")
 
-    # --- ACTIVE ORDERS ---
+    # --- CONNECTION CHECK ---
     if not db.is_connected():
         st.error("Not connected to Google Sheets. Check your service account file and Sheet ID.")
         st.stop()
 
+    # --- ACTIVE ORDERS ---
     orders = db.get_orders()
     delivered_count = db.get_delivered_count()
 
-    st.header(f"Active Orders ({len(orders)})")
-    st.caption(f"{delivered_count} orders delivered and auto-cleared")
+    tab_active, tab_delivered = st.tabs([
+        f"Active Orders ({len(orders)})",
+        f"Delivered ({delivered_count})",
+    ])
 
-    if not orders:
-        st.info(
-            "No active orders. Add AWB numbers to your Google Sheet's **Active** tab:\n\n"
-            "`AWB Number | Customer Name | Phone Number`"
-        )
-    else:
-        import pandas as pd
-        df = pd.DataFrame(orders)
+    with tab_active:
+        if not orders:
+            st.info(
+                "No active orders. Add AWB numbers to your Google Sheet's **Active** tab:\n\n"
+                "`AWB Number | Customer Name | Phone Number`"
+            )
+        else:
+            import pandas as pd
+            df = pd.DataFrame(orders)
 
-        # Highlight problems
-        def highlight(row):
-            colors = []
-            for col in row.index:
-                fa = row.get("Failed Attempts", 0)
-                if col == "Failed Attempts" and fa and int(fa) > 0:
-                    colors.append("background-color: #ffcccc; color: red;")
-                else:
-                    colors.append("")
-            return colors
+            display_cols = [c for c in [
+                "AWB Number", "Customer Name", "Phone Number",
+                "Last Status", "Last Checked", "Failed Attempts",
+            ] if c in df.columns]
 
-        st.dataframe(
-            df.style.apply(highlight, axis=1),
-            use_container_width=True,
-            hide_index=True,
-        )
+            def highlight(row):
+                colors = []
+                for col in row.index:
+                    fa = row.get("Failed Attempts", 0)
+                    if col == "Failed Attempts" and fa and int(fa) > 0:
+                        colors.append("background-color: #ffcccc; color: red;")
+                    else:
+                        colors.append("")
+                return colors
+
+            st.dataframe(
+                df[display_cols].style.apply(highlight, axis=1),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with tab_delivered:
+        delivered_orders = db.get_delivered_orders()
+        if not delivered_orders:
+            st.info("No delivered orders yet.")
+        else:
+            import pandas as pd
+            df_d = pd.DataFrame(delivered_orders)
+            display_cols_d = [c for c in [
+                "AWB Number", "Customer Name", "Last Status", "Last Checked",
+            ] if c in df_d.columns]
+            st.dataframe(
+                df_d[display_cols_d] if display_cols_d else df_d,
+                use_container_width=True,
+                hide_index=True,
+            )
 
     # --- QUICK ACTIONS ---
     st.markdown("---")
-    col_a, col_b = st.columns(2)
+    col_a, col_b, col_c = st.columns(3)
 
     with col_a:
         if orders:
@@ -454,7 +449,10 @@ def run_dashboard():
                 with st.spinner(f"Checking {track_awb}..."):
                     row = next(r for r in orders if str(r.get("AWB Number", "")) == track_awb)
                     ok, msg = process_single_order(row)
-                    st.success(f"Result: {msg}") if ok else st.error(f"Result: {msg}")
+                    if ok:
+                        st.success(f"Result: {msg}")
+                    else:
+                        st.error(f"Result: {msg}")
 
     with col_b:
         if st.button("Test Slack", key="test_slack_btn"):
@@ -465,13 +463,32 @@ def run_dashboard():
                 else:
                     st.error("Failed — check webhook URL in .env")
 
+    with col_c:
+        if st.button("Check DTDC API", key="test_dtdc_btn"):
+            with st.spinner("Testing DTDC..."):
+                ok, msg = test_dtdc_api()
+                if ok:
+                    st.success(f"DTDC API: {msg}")
+                else:
+                    st.error(f"DTDC API: {msg}")
+
     # --- LOGS ---
     st.markdown("---")
     with st.expander("System Logs", expanded=False):
         logs = get_recent_logs(25)
         st.code("".join(logs) or "No logs yet.", language="text")
 
-    if st.button("Refresh", key="refresh"):
+    # Auto-refresh every 60 seconds
+    st.markdown("---")
+    col_refresh, col_auto = st.columns([1, 3])
+    with col_refresh:
+        if st.button("Refresh", key="refresh"):
+            st.rerun()
+    with col_auto:
+        auto_refresh = st.checkbox("Auto-refresh (60s)", value=False, key="auto_refresh")
+
+    if auto_refresh:
+        time.sleep(60)
         st.rerun()
 
 

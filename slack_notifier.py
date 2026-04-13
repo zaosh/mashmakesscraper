@@ -11,8 +11,8 @@ def _send_slack_message(blocks, text_fallback):
     if not config.SLACK_ENABLED:
         return False
 
-    if not config.SLACK_WEBHOOK_URL or config.SLACK_WEBHOOK_URL.startswith("https://hooks.slack.com/services/YOUR"):
-        log_warning("Slack webhook URL not configured. Skipping Slack notification.")
+    if not config.SLACK_WEBHOOK_URL or "hooks.slack.com" not in config.SLACK_WEBHOOK_URL:
+        log_warning("Slack webhook URL not configured. Skipping notification.")
         return False
 
     payload = {"text": text_fallback, "blocks": blocks}
@@ -34,7 +34,6 @@ def _send_slack_message(blocks, text_fallback):
 
 
 def notify_status_change(order_id, customer_name, awb, old_status, new_status):
-    """Sends a Slack message when a shipment status changes."""
     text = f"Shipment {order_id} ({awb}) status changed: {old_status} -> {new_status}"
     blocks = [
         {
@@ -61,7 +60,6 @@ def notify_status_change(order_id, customer_name, awb, old_status, new_status):
 
 
 def notify_scrape_failure(order_id, awb, reason, failed_attempts, retry_limit):
-    """Sends a Slack warning when scraping fails for a specific order."""
     severity = "CRITICAL" if failed_attempts >= retry_limit else "Warning"
     emoji = ":red_circle:" if failed_attempts >= retry_limit else ":warning:"
     text = f"{severity}: Scraping failed for order {order_id} (AWB {awb}) - attempt {failed_attempts}/{retry_limit}"
@@ -93,7 +91,6 @@ def notify_scrape_failure(order_id, awb, reason, failed_attempts, retry_limit):
 
 
 def notify_batch_complete(total, success_count, fail_count, scraper_status):
-    """Sends a Slack summary after each tracking batch completes."""
     if total == 0:
         return False
 
@@ -105,7 +102,7 @@ def notify_batch_complete(total, success_count, fail_count, scraper_status):
         color_text = "Some orders failed to track. Check the dashboard for details."
     else:
         emoji = ":rotating_light:"
-        color_text = "*CRITICAL: All orders failed to track.* The scraper may be broken or the DTDC site may have changed."
+        color_text = "*CRITICAL: All orders failed to track.* The scraper may be broken."
 
     text = f"Batch complete: {success_count}/{total} succeeded, {fail_count} failed ({scraper_status})"
     blocks = [
@@ -131,10 +128,6 @@ def notify_batch_complete(total, success_count, fail_count, scraper_status):
 
 
 def notify_scraper_collapse(error_message):
-    """
-    Sends an urgent Slack alert when the scraper has completely collapsed
-    (100% failure rate across all orders).
-    """
     text = f"CRITICAL: MashMakes scraper has collapsed - {error_message}"
     blocks = [
         {
@@ -148,9 +141,9 @@ def notify_scraper_collapse(error_message):
                 "text": (
                     "*The tracking system failed on ALL orders.*\n\n"
                     "Likely causes:\n"
-                    "- DTDC or TrackCourier.io changed their website layout\n"
+                    "- DTDC changed their website or API\n"
                     "- The tracking site is down or blocking requests\n"
-                    "- Network/proxy issues on the server\n\n"
+                    "- Network issues on the server\n\n"
                     "*Immediate action required:*\n"
                     "1. Check the dashboard logs for error details\n"
                     "2. Run `python test_system.py` with a known AWB to verify\n"
@@ -163,17 +156,11 @@ def notify_scraper_collapse(error_message):
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*Error:*\n```{error_message}```"}
         },
-        {"type": "divider"},
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": "This alert was also sent via SMS to the admin phone."}]
-        }
     ]
     return _send_slack_message(blocks, text)
 
 
 def notify_daily_summary(total_orders, total_failed, total_sms, success_today, failed_today):
-    """Sends the end-of-day summary report to Slack."""
     health = ":white_check_mark: Healthy" if failed_today == 0 else ":warning: Issues detected"
     text = f"Daily Summary: {total_orders} orders, {total_failed} failed, {total_sms} SMS sent"
     blocks = [
@@ -197,20 +184,11 @@ def notify_daily_summary(total_orders, total_failed, total_sms, success_today, f
                 {"type": "mrkdwn", "text": f"*Failed Today:*\n{failed_today}"},
             ]
         },
-        {"type": "divider"},
-        {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": "Next batch runs in 3 hours. View the dashboard for full details."}]
-        }
     ]
     return _send_slack_message(blocks, text)
 
 
 def test_slack_connection():
-    """
-    Sends a test message to verify the Slack webhook is working.
-    Returns True if successful.
-    """
     text = "MashMakes Tracker: Slack connection test successful!"
     blocks = [
         {

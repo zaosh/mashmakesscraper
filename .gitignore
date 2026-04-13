@@ -26,14 +26,19 @@ share/python-wheels/
 
 # Logs and Data
 *.log
-data/orders.csv
-data/system.log
-data/system_state.json
-data/setup_complete.json
-data/tracker.db
+data/
+!data/.gitkeep
 
 # Secrets - NEVER commit these
 service_account.json
 
 # Streamlit
 .streamlit/
+
+# Temp/debug files
+failure.html
+result.txt
+tmp_*.py
+
+# Claude
+.claude/

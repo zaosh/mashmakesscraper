@@ -6,12 +6,24 @@ import time
 # DTDC's official tracking API (free, no auth required)
 DTDC_API_URL = "https://www.dtdc.com/wp-json/custom/v1/domestic/track"
 
+def _sanitize_awb(awb_number):
+    """Strip and validate AWB number — alphanumeric only."""
+    import re
+    clean = re.sub(r'[^a-zA-Z0-9]', '', str(awb_number).strip())
+    if not clean or len(clean) > 30:
+        return None
+    return clean
+
+
 def fetch_dtdc_status(awb_number):
     """
     Calls DTDC's official JSON API directly. No browser needed.
     Returns: (success_boolean, status_string_or_error_message)
     """
     try:
+        awb_number = _sanitize_awb(awb_number)
+        if not awb_number:
+            return False, "Invalid AWB number format"
         log_info(f"Fetching status for AWB {awb_number} via DTDC API...")
 
         resp = requests.post(
@@ -84,6 +96,10 @@ def scrape_dtdc_status_browser(awb_number):
         from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
     except ImportError:
         return False, "Playwright not installed - browser fallback unavailable"
+
+    awb_number = _sanitize_awb(awb_number)
+    if not awb_number:
+        return False, "Invalid AWB number format"
 
     with sync_playwright() as p:
         browser = None

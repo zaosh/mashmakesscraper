@@ -29,7 +29,7 @@ def log_error(message):
 
 def get_recent_logs(lines=20):
     try:
-        with open(config.LOG_FILE, 'r') as f:
+        with open(config.LOG_FILE, 'r', encoding='utf-8', errors='replace') as f:
             log_lines = f.readlines()
             return log_lines[-lines:]
     except FileNotFoundError:

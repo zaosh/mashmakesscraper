@@ -164,6 +164,17 @@ class DatabaseManager:
         except Exception:
             return 0
 
+    def get_delivered_orders(self):
+        """Get all delivered orders."""
+        if not self.delivered_ws:
+            return []
+        try:
+            records = self.delivered_ws.get_all_records()
+            return [r for r in records if str(r.get("AWB Number", "")).strip()]
+        except Exception as e:
+            log_error(f"Failed to read delivered orders: {str(e)}")
+            return []
+
     # --- System state (local JSON, not in the sheet) ---
 
     def load_system_state(self):
