@@ -11,10 +11,22 @@ from slack_notifier import (
     notify_batch_complete, notify_scraper_collapse, notify_daily_summary,
 )
 
-db = DatabaseManager()
+# Lazy-init: created on first use, not at import time.
+# This avoids a stale connection when dashboard imports process_single_order.
+_db = None
 
 
-def process_single_order(row):
+def _get_db():
+    global _db
+    if _db is None:
+        _db = DatabaseManager()
+    return _db
+
+
+def process_single_order(row, db=None):
+    if db is None:
+        db = _get_db()
+
     awb = str(row.get("AWB Number", "")).strip()
     customer_name = str(row.get("Customer Name", "")).strip()
     phone = str(row.get("Phone Number", "")).strip()
@@ -77,7 +89,15 @@ def process_single_order(row):
 
 
 def run_tracking_batch():
+    db = _get_db()
     log_info("--- Starting Tracking Batch ---")
+
+    # Refresh connection if token is stale
+    db._ensure_fresh_connection()
+
+    if not db.is_connected():
+        log_info("DB not connected, retrying...")
+        db._connect()
 
     if not db.is_connected():
         log_error("Not connected to Google Sheets. Skipping batch.")
@@ -103,7 +123,7 @@ def run_tracking_batch():
 
     for row in orders:
         try:
-            success, reason = process_single_order(row)
+            success, reason = process_single_order(row, db=db)
             if success:
                 success_count += 1
             else:
@@ -138,7 +158,9 @@ def run_tracking_batch():
 
 
 def send_daily_summary():
+    db = _get_db()
     log_info("Generating daily summary...")
+    db._ensure_fresh_connection()
     state = db.load_system_state()
     orders = db.get_orders()
     delivered_count = db.get_delivered_count()
@@ -166,14 +188,40 @@ def send_daily_summary():
     })
 
 
+def check_new_orders():
+    """Quick check for newly added AWBs (no Last Status yet) and track them immediately."""
+    db = _get_db()
+    db._ensure_fresh_connection()
+    if not db.is_connected():
+        return
+
+    orders = db.get_orders()
+    new_orders = [r for r in orders if not str(r.get("Last Status", "")).strip()]
+
+    if not new_orders:
+        return
+
+    log_info(f"Found {len(new_orders)} new AWB(s) — tracking now.")
+
+    for row in new_orders:
+        try:
+            process_single_order(row, db=db)
+        except Exception as e:
+            log_error(f"Error processing new AWB {row.get('AWB Number', '?')}: {str(e)}")
+        time.sleep(2)
+
+
 def start_scheduler():
     log_info("Scheduler started.")
 
     # Run once at startup
     run_tracking_batch()
 
-    # Every 3 hours
+    # Every 3 hours — full batch
     schedule.every(3).hours.do(run_tracking_batch)
+
+    # Every 5 minutes — check for newly added AWBs only
+    schedule.every(5).minutes.do(check_new_orders)
 
     # Daily summary at 18:00
     schedule.every().day.at("18:00").do(send_daily_summary)

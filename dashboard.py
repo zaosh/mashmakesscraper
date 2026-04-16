@@ -356,7 +356,7 @@ def run_dashboard():
             st.success(f"Tracker: {scraper_status}")
         elif scraper_status in ("Warning", "Idle (No Orders)"):
             st.warning(f"Tracker: {scraper_status}")
-        elif last_run == "Never" or scraper_status == "Not Run":
+        elif last_run == "Never" or scraper_status in ("Not Run", "Unknown"):
             st.info("Tracker: Awaiting first run")
         else:
             st.error(f"Tracker: {scraper_status}")
@@ -448,7 +448,7 @@ def run_dashboard():
                 from main import process_single_order
                 with st.spinner(f"Checking {track_awb}..."):
                     row = next(r for r in orders if str(r.get("AWB Number", "")) == track_awb)
-                    ok, msg = process_single_order(row)
+                    ok, msg = process_single_order(row, db=db)
                     if ok:
                         st.success(f"Result: {msg}")
                     else:
@@ -471,6 +471,149 @@ def run_dashboard():
                     st.success(f"DTDC API: {msg}")
                 else:
                     st.error(f"DTDC API: {msg}")
+
+    # --- SETTINGS ---
+    st.markdown("---")
+    with st.expander("Settings", expanded=False):
+        st.subheader("Change Google Sheet")
+        st.caption(f"Current Sheet ID: `{config.GOOGLE_SPREADSHEET_ID or 'Not set'}`")
+        new_sheet_id = st.text_input(
+            "New Google Sheet ID",
+            placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
+            key="new_sheet_id",
+        )
+        if new_sheet_id:
+            col_test_sheet, col_save_sheet = st.columns(2)
+            with col_test_sheet:
+                if st.button("Test Connection", key="test_new_sheet"):
+                    with st.spinner("Testing Google Sheets connection..."):
+                        ok, msg = test_google_sheets(new_sheet_id)
+                        if ok:
+                            st.success(f"{msg}")
+                        else:
+                            st.error(f"Failed: {msg}")
+                            if "403" in str(msg):
+                                st.warning("Share the new Sheet with your service account email as Editor.")
+            with col_save_sheet:
+                if st.button("Save & Switch Sheet", key="save_new_sheet", type="primary"):
+                    with st.spinner("Verifying and switching..."):
+                        ok, msg = test_google_sheets(new_sheet_id)
+                        if ok:
+                            write_env_file({"GOOGLE_SPREADSHEET_ID": new_sheet_id})
+                            _reload_config()
+                            st.success(f"Switched to: {msg}")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(f"Cannot switch — connection failed: {msg}")
+
+        st.markdown("---")
+        st.subheader("Change Slack Webhook")
+        st.caption(f"Current: `{'Configured' if config.SLACK_WEBHOOK_URL and 'hooks.slack.com' in config.SLACK_WEBHOOK_URL else 'Not set'}`")
+        new_slack_url = st.text_input(
+            "New Slack Webhook URL",
+            placeholder="https://hooks.slack.com/services/T.../B.../xxx",
+            key="new_slack_url",
+        )
+        if new_slack_url:
+            col_test_slack, col_save_slack = st.columns(2)
+            with col_test_slack:
+                if st.button("Test Webhook", key="test_new_slack"):
+                    with st.spinner("Sending test message..."):
+                        ok, msg = test_slack_webhook(new_slack_url)
+                        if ok:
+                            st.success("Connected! Check your Slack channel.")
+                        else:
+                            st.error(f"Failed: {msg}")
+            with col_save_slack:
+                if st.button("Save Webhook", key="save_new_slack", type="primary"):
+                    if "hooks.slack.com" not in new_slack_url:
+                        st.error("Invalid URL — must start with https://hooks.slack.com/services/")
+                    else:
+                        write_env_file({"SLACK_WEBHOOK_URL": new_slack_url, "SLACK_ENABLED": "True"})
+                        _reload_config()
+                        st.success("Slack webhook updated!")
+                        time.sleep(1)
+                        st.rerun()
+
+        st.markdown("---")
+        st.subheader("Custom Slack Messages")
+        st.caption(
+            "Customize the messages sent to Slack. Use these placeholders: "
+            "`{order_id}`, `{customer}`, `{awb}`, `{old_status}`, `{new_status}`"
+        )
+
+        # Load current custom messages from state
+        _state = db.load_system_state()
+        current_delivered_msg = _state.get("custom_msg_delivered", "")
+        current_status_msg = _state.get("custom_msg_status_change", "")
+
+        delivered_msg = st.text_area(
+            "Delivered Message",
+            value=current_delivered_msg,
+            placeholder="e.g., Hey {customer}, your order {order_id} (AWB: {awb}) has been delivered!",
+            key="custom_delivered_msg",
+            height=80,
+        )
+
+        status_msg = st.text_area(
+            "Status Change Message",
+            value=current_status_msg,
+            placeholder="e.g., Hi {customer}, your shipment {awb} moved from {old_status} to {new_status}.",
+            key="custom_status_msg",
+            height=80,
+        )
+
+        if st.button("Save Messages", key="save_custom_msgs", type="primary"):
+            db.update_system_state({
+                "custom_msg_delivered": delivered_msg,
+                "custom_msg_status_change": status_msg,
+            })
+            st.success("Custom messages saved!")
+
+        # --- Preview ---
+        st.markdown("**Preview** _(with sample data)_")
+        sample = {
+            "order_id": "ORD-1234",
+            "customer": "Rahul Sharma",
+            "awb": "X98765432",
+            "old_status": "In Transit",
+            "new_status": "Out for Delivery",
+        }
+        sample_delivered = {
+            "order_id": "ORD-1234",
+            "customer": "Rahul Sharma",
+            "awb": "X98765432",
+            "old_status": "Out for Delivery",
+            "new_status": "Delivered",
+        }
+
+        col_prev1, col_prev2 = st.columns(2)
+        with col_prev1:
+            st.markdown("**Status Change**")
+            if status_msg:
+                preview_status = (status_msg
+                    .replace("{order_id}", sample["order_id"])
+                    .replace("{customer}", sample["customer"])
+                    .replace("{awb}", sample["awb"])
+                    .replace("{old_status}", sample["old_status"])
+                    .replace("{new_status}", sample["new_status"]))
+                st.info(preview_status)
+            else:
+                st.caption("_No custom message — default Slack notification will be used._")
+
+        with col_prev2:
+            st.markdown("**Delivered**")
+            if delivered_msg:
+                preview_delivered = (delivered_msg
+                    .replace("{order_id}", sample_delivered["order_id"])
+                    .replace("{customer}", sample_delivered["customer"])
+                    .replace("{awb}", sample_delivered["awb"])
+                    .replace("{old_status}", sample_delivered["old_status"])
+                    .replace("{new_status}", sample_delivered["new_status"]))
+                st.success(preview_delivered)
+            else:
+                st.caption("_No custom message — default Slack notification will be used._")
 
     # --- LOGS ---
     st.markdown("---")

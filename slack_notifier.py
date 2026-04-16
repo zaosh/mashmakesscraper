@@ -33,12 +33,56 @@ def _send_slack_message(blocks, text_fallback):
         return False
 
 
+def _load_custom_messages():
+    """Load custom message templates from system state."""
+    import json
+    import os
+    try:
+        state_file = os.path.join(config.DATA_DIR, "system_state.json")
+        if os.path.exists(state_file):
+            with open(state_file, "r") as f:
+                state = json.load(f)
+            return {
+                "delivered": state.get("custom_msg_delivered", ""),
+                "status_change": state.get("custom_msg_status_change", ""),
+            }
+    except Exception:
+        pass
+    return {"delivered": "", "status_change": ""}
+
+
+def _format_custom_message(template, order_id, customer_name, awb, old_status, new_status):
+    """Replace placeholders in a custom message template."""
+    if not template:
+        return ""
+    return (template
+            .replace("{order_id}", str(order_id))
+            .replace("{customer}", str(customer_name))
+            .replace("{awb}", str(awb))
+            .replace("{old_status}", str(old_status))
+            .replace("{new_status}", str(new_status)))
+
+
 def notify_status_change(order_id, customer_name, awb, old_status, new_status):
+    is_delivered = "delivered" in new_status.lower()
+    custom_msgs = _load_custom_messages()
+
+    # Pick the right custom message template
+    if is_delivered and custom_msgs["delivered"]:
+        custom_text = _format_custom_message(
+            custom_msgs["delivered"], order_id, customer_name, awb, old_status, new_status)
+    elif custom_msgs["status_change"]:
+        custom_text = _format_custom_message(
+            custom_msgs["status_change"], order_id, customer_name, awb, old_status, new_status)
+    else:
+        custom_text = ""
+
+    header = "Order Delivered!" if is_delivered else "Shipment Status Update"
     text = f"Shipment {order_id} ({awb}) status changed: {old_status} -> {new_status}"
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": "Shipment Status Update"}
+            "text": {"type": "plain_text", "text": header}
         },
         {
             "type": "section",
@@ -56,6 +100,11 @@ def notify_status_change(order_id, customer_name, awb, old_status, new_status):
             ]
         }
     ]
+    if custom_text:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": custom_text}
+        })
     return _send_slack_message(blocks, text)
 
 

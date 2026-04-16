@@ -66,19 +66,29 @@ The system sends these to your channel:
 - **Scraper collapse** — urgent alert if ALL orders fail (with troubleshooting steps)
 - **Daily summary** — end-of-day report at 6 PM
 
-## Deploying on a Server (Optional)
+## Recent Fixes
 
-To keep it running without your laptop:
+- Auto-reconnects to Google Sheets when auth token expires
+- Row operations now find rows by AWB value instead of index (safe with concurrent edits)
+- Sheet updates batched into single API calls (avoids Google rate limits)
+- DB connection is lazy-initialized (no longer breaks if config isn't ready at import)
+- System state file writes atomically (no corruption if read during write)
+- Log files auto-rotate at 5 MB (won't fill disk)
+- Dashboard correctly shows "Awaiting first run" instead of error on fresh setups
+
+## Running 24/7 on a Server
+
+- Auto-reconnects to Google Sheets without manual intervention
+- Survives token expiry, network blips, and API downtime gracefully
+- Log rotation prevents disk from filling up
+- Immediate Slack alerts if the tracker goes down
+- Daily summary reports at 6 PM
+- Auto-restarts on reboot with pm2:
 
 ```bash
-# Install pm2
 npm install -g pm2
-
-# Start both processes
 pm2 start main.py --name "tracker" --interpreter python3
 pm2 start "streamlit run dashboard.py --server.port 80" --name "dashboard"
-
-# Auto-restart on reboot
 pm2 save && pm2 startup
 ```
 

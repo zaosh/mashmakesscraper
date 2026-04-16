@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import config
 from logger import log_error, log_info, log_warning
 from datetime import datetime
@@ -34,6 +35,7 @@ class DatabaseManager:
         self.sheet = None
         self.active_ws = None
         self.delivered_ws = None
+        self._connected_at = None
         self._connect()
 
     def _connect(self):
@@ -63,9 +65,20 @@ class DatabaseManager:
             self.delivered_ws = self._get_or_create_worksheet("Delivered")
             self._ensure_headers(self.delivered_ws)
 
+            self._connected_at = time.time()
             log_info("Connected to Google Sheets.")
         except Exception as e:
+            self.sheet = None
+            self.active_ws = None
+            self.delivered_ws = None
+            self._connected_at = None
             log_error(f"Google Sheets connection failed: {str(e)}")
+
+    def _ensure_fresh_connection(self):
+        """Reconnect if the token is older than 45 minutes (tokens expire at 60)."""
+        if self._connected_at and (time.time() - self._connected_at) > 2700:
+            log_info("Google auth token nearing expiry, reconnecting...")
+            self._connect()
 
     def _get_or_create_worksheet(self, title):
         try:
@@ -93,10 +106,27 @@ class DatabaseManager:
     def is_connected(self):
         return self.active_ws is not None
 
+    def _find_row_by_awb(self, ws, awb_number):
+        """Find a row by AWB using cell search instead of index math.
+        Returns (row_index, record_dict) or (None, None)."""
+        try:
+            cell = ws.find(str(awb_number).strip(), in_column=1)
+            if cell:
+                row_values = ws.row_values(cell.row)
+                headers = ws.row_values(1)
+                record = {}
+                for j, h in enumerate(headers):
+                    record[h] = row_values[j] if j < len(row_values) else ""
+                return cell.row, record
+        except Exception:
+            pass
+        return None, None
+
     def get_orders(self):
         """Get all active (non-delivered) orders."""
         if not self.active_ws:
             return []
+        self._ensure_fresh_connection()
         try:
             records = self.active_ws.get_all_records()
             # Filter out empty rows (team might leave blank rows)
@@ -110,20 +140,25 @@ class DatabaseManager:
         if not self.active_ws:
             return False
         try:
-            records = self.active_ws.get_all_records()
             headers = self.active_ws.row_values(1)
+            row_idx, _ = self._find_row_by_awb(self.active_ws, awb_number)
+            if row_idx is None:
+                log_warning(f"AWB {awb_number} not found in Active sheet.")
+                return False
 
-            for i, record in enumerate(records):
-                if str(record.get("AWB Number", "")).strip() == str(awb_number).strip():
-                    row_idx = i + 2  # +1 for header, +1 for 1-indexed
-                    for key, value in updates.items():
-                        if key in headers:
-                            col_idx = headers.index(key) + 1
-                            self.active_ws.update_cell(row_idx, col_idx, str(value))
-                    return True
+            # Batch all cell updates into one API call
+            cells_to_update = []
+            for key, value in updates.items():
+                if key in headers:
+                    col_idx = headers.index(key) + 1
+                    cells_to_update.append(
+                        gspread.Cell(row=row_idx, col=col_idx, value=str(value))
+                    )
 
-            log_warning(f"AWB {awb_number} not found in Active sheet.")
-            return False
+            if cells_to_update:
+                self.active_ws.update_cells(cells_to_update)
+            return True
+
         except Exception as e:
             log_error(f"Failed to update AWB {awb_number}: {str(e)}")
             return False
@@ -133,24 +168,24 @@ class DatabaseManager:
         if not self.active_ws or not self.delivered_ws:
             return False
         try:
-            records = self.active_ws.get_all_records()
-            headers = self.active_ws.row_values(1)
+            row_idx, record = self._find_row_by_awb(self.active_ws, awb_number)
+            if row_idx is None:
+                return False
 
-            for i, record in enumerate(records):
-                if str(record.get("AWB Number", "")).strip() == str(awb_number).strip():
-                    row_idx = i + 2
+            # Build the row for Delivered sheet in header order
+            delivered_row = [str(record.get(h, "")) for h in self.REQUIRED_HEADERS]
+            self.delivered_ws.append_row(delivered_row, value_input_option="RAW")
 
-                    # Build the row for Delivered sheet in header order
-                    delivered_row = [str(record.get(h, "")) for h in self.REQUIRED_HEADERS]
-                    self.delivered_ws.append_row(delivered_row, value_input_option="RAW")
+            # Re-verify the row still has the same AWB before deleting
+            current_value = self.active_ws.cell(row_idx, 1).value
+            if str(current_value).strip() == str(awb_number).strip():
+                self.active_ws.delete_rows(row_idx)
+                log_info(f"AWB {awb_number} moved to Delivered sheet.")
+                return True
+            else:
+                log_warning(f"Row {row_idx} changed during move for AWB {awb_number}, skipping delete.")
+                return False
 
-                    # Delete from Active
-                    self.active_ws.delete_rows(row_idx)
-
-                    log_info(f"AWB {awb_number} moved to Delivered sheet.")
-                    return True
-
-            return False
         except Exception as e:
             log_error(f"Failed to move AWB {awb_number} to Delivered: {str(e)}")
             return False
@@ -195,5 +230,8 @@ class DatabaseManager:
     def update_system_state(self, updates: dict):
         state = self.load_system_state()
         state.update(updates)
-        with open(self.state_file, "w") as f:
+        # Atomic write: write to temp file then rename to avoid corruption
+        tmp_file = self.state_file + ".tmp"
+        with open(tmp_file, "w") as f:
             json.dump(state, f, indent=4)
+        os.replace(tmp_file, self.state_file)
